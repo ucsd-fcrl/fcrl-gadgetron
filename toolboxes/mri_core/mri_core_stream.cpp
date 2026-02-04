@@ -149,7 +149,7 @@ namespace Gadgetron
         size_t NDim = arr.getNDim();
 
         std::vector<size_t> dim(NDim);
-        for (auto i=0; i<NDim; i++) dim[i] = arr.getDims()[i];
+        auto& dims_ref = const_cast<ISMRMRD::NDArray<T>&>(arr).getDims(); for (auto i=0; i<NDim; i++) dim[i] = dims_ref[i];
 
         ho_arr.create(dim);
         memcpy(ho_arr.get_data_ptr(), arr.getDataPtr(), ho_arr.get_number_of_bytes());

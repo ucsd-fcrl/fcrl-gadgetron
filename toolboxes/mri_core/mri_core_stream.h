@@ -60,18 +60,8 @@ namespace Gadgetron
         template <typename DataType> 
         void stream_to_array_buffer(const std::string& name, const hoNDArray<DataType>& data)
         {
-            std::string buf_name;
-            std::shared_ptr<std::ofstream> os = this->find_and_open_stream(name, buf_name);
-            if (os && os->is_open())
-            {
-                GDEBUG_STREAM("Generic recon, continue streaming the array data to the buffer " << buf_name);
-                ISMRMRD::NDArray<DataType> arr;
-                convert_hoNDArray_to_ismrmrd_ndarray(data, arr);
-
-                ISMRMRD::OStreamView ws(*os);
-                ISMRMRD::ProtocolSerializer serializer(ws);
-                serializer.serialize(arr);
-            }
+            GWARN_STREAM("stream_to_array_buffer disabled");
+            return;
         }
 
         // stream to ismrmrd image stream, e.g. for coil maps, g-maps and reconed images

@@ -1,6 +1,6 @@
 set(CUDA_USE_STATIC_CUDA_RUNTIME OFF CACHE BOOL "")
 
-find_package(CUDA 12.3)
+find_package(CUDA)
 
 # Check for GPUs present and their compute capability
 # based on http://stackoverflow.com/questions/2285185/easiest-way-to-test-for-existence-of-cuda-capable-gpu-from-cmake/2297877#2297877 (Christopher Bruns)
