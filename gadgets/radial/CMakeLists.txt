@@ -8,7 +8,9 @@ install (FILES  RadialPhaseCorrectionGadget.h DESTINATION ${GADGETRON_INSTALL_IN
 add_library(gadgetron_gpuradial SHARED 
   gadgetron_radial_export.h
   gpuRadialPrepGadget.h gpuRadialPrepGadget.cpp 
+  gpuRadialPrepGadgetFCRL.h gpuRadialPrepGadgetFCRL.cpp 
   gpuRadialSensePrepGadget.h gpuRadialSensePrepGadget.cpp 
+  gpuRadialSensePrepGadgetFCRL.h gpuRadialSensePrepGadgetFCRL.cpp 
   gpuRadialSpiritPrepGadget.h gpuRadialSpiritPrepGadget.cpp 
   gpuRetroGatedSensePrepGadget.h gpuRetroGatedSensePrepGadget.cpp
   ${PHASE_GADGET})
@@ -26,7 +28,9 @@ target_link_libraries(gadgetron_gpuradial
 
 install (FILES  gadgetron_radial_export.h
                 gpuRadialPrepGadget.h 
+                gpuRadialPrepGadgetFCRL.h 
                 gpuRadialSensePrepGadget.h 
+                gpuRadialSensePrepGadgetFCRL.h 
                 gpuRadialSpiritPrepGadget.h 
                 gpuRetroGatedSensePrepGadget.h 
                 DESTINATION ${GADGETRON_INSTALL_INCLUDE_PATH} COMPONENT main)
