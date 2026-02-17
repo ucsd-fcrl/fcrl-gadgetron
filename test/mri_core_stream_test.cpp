@@ -166,14 +166,10 @@ TEST(GenericReconIsmrmrdStreamerTest, test_streamer)
             std::ifstream fd(parameters[GENERIC_RECON_STREAM_UNDERSAMPLED_KSPACE], std::ios::in | std::ios::binary);
             ASSERT_EQ(fd.is_open(), true);
 
-            ISMRMRD::IStreamView rs(fd);
-            ISMRMRD::ProtocolDeserializer deserializer(rs);
+            hoNDArray<std::complex<float>> data_deserialized;
+            Gadgetron::Core::IO::read(fd, data_deserialized);
 
-            ISMRMRD::NDArray<std::complex<float>> arr;
-            deserializer.deserialize(arr);
-
-            hoNDArray<std::complex<float>> data_deserialized, diff;
-            Gadgetron::convert_ismrmrd_ndarray_to_hoNDArray(arr, data_deserialized);
+            hoNDArray<std::complex<float>> diff;
 
             Gadgetron::subtract(data, data_deserialized, diff);
             v = Gadgetron::nrm2(diff);
@@ -182,14 +178,10 @@ TEST(GenericReconIsmrmrdStreamerTest, test_streamer)
         {
             std::ifstream fd_ref(parameters[GENERIC_RECON_STREAM_REF_KSPACE], std::ios::in | std::ios::binary);
 
-            ISMRMRD::IStreamView rs(fd_ref);
-            ISMRMRD::ProtocolDeserializer deserializer(rs);
+            hoNDArray<std::complex<float>> ref_deserialized;
+            Gadgetron::Core::IO::read(fd_ref, ref_deserialized);
 
-            ISMRMRD::NDArray<std::complex<float>> arr;
-            deserializer.deserialize(arr);
-
-            hoNDArray<std::complex<float>> ref_deserialized, diff;
-            Gadgetron::convert_ismrmrd_ndarray_to_hoNDArray(arr, ref_deserialized);
+            hoNDArray<std::complex<float>> diff;
 
             Gadgetron::subtract(ref, ref_deserialized, diff);
             v = Gadgetron::nrm2(diff);
