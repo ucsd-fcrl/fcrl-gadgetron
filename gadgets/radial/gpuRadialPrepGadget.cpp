@@ -602,6 +602,7 @@ namespace Gadgetron{
       
     case 2:
     case 3:
+    case 4:
       {
         if( rotations_per_reconstruction_ == 0 ){	  
           unsigned int first_profile_in_reconstruction = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
@@ -644,6 +645,7 @@ namespace Gadgetron{
       
     case 2:
     case 3:
+    case 4:
       host_weights_recon_[set*slices_+slice] = *compute_radial_dcw_golden_ratio_2d<float>
         ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], oversampling_factor_, 
           1.0f/(float(samples_per_profile_)/float(image_dimensions_recon_[0])),0,
@@ -680,6 +682,7 @@ namespace Gadgetron{
 	
     case 2:
     case 3:
+    case 4:
       { 
         unsigned int first_profile_in_buffer = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
         result = compute_radial_trajectory_golden_ratio_2d<float>
@@ -711,6 +714,7 @@ namespace Gadgetron{
       
     case 2:
     case 3:
+    case 4:
       return compute_radial_dcw_golden_ratio_2d<float>
         ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], oversampling_factor_, 
           1.0f/(float(samples_per_profile_)/float(image_dimensions_recon_[0])),0,
@@ -740,6 +744,7 @@ namespace Gadgetron{
 	
     case 2:
     case 3:
+    case 4:
       { 
         unsigned int first_profile = 
           std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]*
@@ -783,6 +788,7 @@ namespace Gadgetron{
       
     case 2:
     case 3:
+    case 4:
       {
         unsigned int num_profiles = 
           profiles_per_frame_[set*slices_+slice]*buffer_frames_per_rotation_[set*slices_+slice]*buffer_length_in_rotations_;

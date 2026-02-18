@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpuRadialPrepGadget.h"
+#include "gpuRadialPrepGadgetFCRL.h"
 
 namespace Gadgetron{
 

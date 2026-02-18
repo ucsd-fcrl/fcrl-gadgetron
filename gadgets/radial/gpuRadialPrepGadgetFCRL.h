@@ -84,7 +84,7 @@ namespace Gadgetron{
     virtual ~gpuRadialPrepGadgetFCRL();
 
   protected:
-    GADGET_PROPERTY_LIMITS(mode,int,"Radial mode", 0, GadgetPropertyLimitsEnumeration, 0,1,2,3);
+    GADGET_PROPERTY_LIMITS(mode,int,"Radial mode", 0, GadgetPropertyLimitsEnumeration, 0,1,2,3,4);
     GADGET_PROPERTY(deviceno,int,"GPU Device Number", 0);
     GADGET_PROPERTY(buffer_length_in_rotations, int, "Number of rotations in a buffer", 1);
     GADGET_PROPERTY(buffer_using_solver, bool, "Use solver for buffer", false);
