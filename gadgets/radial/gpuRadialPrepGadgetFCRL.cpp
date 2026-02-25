@@ -15,6 +15,8 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include <fstream>
+#include <sstream>
 
 namespace Gadgetron{
 
@@ -196,7 +198,7 @@ namespace Gadgetron{
       }
       
       if( frames_per_rotation_[i] == 0 ){
-        if( mode_ == 2 || mode_ == 3 ) // golden ratio
+        if( mode_ == 2 || mode_ == 3 || mode_ == 4 ) // golden ratio
           frames_per_rotation_[i] = 1;
         else
           frames_per_rotation_[i] = image_dimensions_[0]/profiles_per_frame_[i];
@@ -237,6 +239,24 @@ namespace Gadgetron{
     if( !csm_host_.get() || !reg_host_.get() || !host_traj_recon_.get() || !host_weights_recon_ ){
       GDEBUG("Failed to allocate host memory (3)\n");
       return GADGET_FAIL;
+    }
+
+    // FCRL: Initialize custom angle support for mode 4
+    fcrl_use_custom_angles = false;
+    fcrl_total_angles = 0;
+    fcrl_angles_csv_path_ = fcrl_angles_csv_path.value();
+
+    if (mode_ == 4 && !fcrl_angles_csv_path_.empty()) {
+      GDEBUG("FCRL: Mode 4 detected, loading custom angles from: %s\n", fcrl_angles_csv_path_.c_str());
+      if (fcrl_load_custom_angles_from_csv() != GADGET_OK) {
+        GDEBUG("FCRL: Failed to load custom angles from CSV. Falling back to golden angle.\n");
+        fcrl_use_custom_angles = false;
+      } else {
+        fcrl_use_custom_angles = true;
+        GDEBUG("FCRL: Successfully loaded %zu custom angles\n", fcrl_total_angles);
+      }
+    } else if (mode_ == 4) {
+      GDEBUG("FCRL: Mode 4 detected but no CSV path provided. Using golden angle.\n");
     }
 
     return GADGET_OK;
@@ -483,7 +503,7 @@ namespace Gadgetron{
       // - for golden ratio based acquisitions
       // - when we are reconstructing frame-by-frame
       
-      if( mode_ == 2 || mode_ == 3 || rotations_per_reconstruction_ == 0 ){
+      if( mode_ == 2 || mode_ == 3 || mode_ == 4 || rotations_per_reconstruction_ == 0 ){
         calculate_trajectory_for_reconstruction
           ( profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0), set, slice );
       }
@@ -603,7 +623,6 @@ namespace Gadgetron{
       
     case 2:
     case 3:
-    case 4:
       {
         if( rotations_per_reconstruction_ == 0 ){	  
           unsigned int first_profile_in_reconstruction = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
@@ -619,6 +638,41 @@ namespace Gadgetron{
               frames_per_rotation_[set*slices_+slice]*rotations_per_reconstruction_, first_profile_in_reconstruction,
               (mode_==2) ? GR_ORIGINAL : GR_SMALLEST )->to_host();
         }	  
+      }
+      break;
+
+    case 4:
+      {
+        if (fcrl_use_custom_angles) {
+          // FCRL: Use custom angles from CSV
+          if( rotations_per_reconstruction_ == 0 ){	  
+            unsigned int first_profile_in_reconstruction = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
+            host_traj_recon_[set*slices_+slice] = *fcrl_compute_custom_radial_trajectory_2d(
+              samples_per_profile_, profiles_per_frame_[set*slices_+slice], first_profile_in_reconstruction)->to_host();	
+          }
+          else{
+            unsigned int first_profile_in_reconstruction = 
+              std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]*frames_per_rotation_[set*slices_+slice]*rotations_per_reconstruction_+1);
+            host_traj_recon_[set*slices_+slice] = *fcrl_compute_custom_radial_trajectory_2d(
+              samples_per_profile_, 
+              profiles_per_frame_[set*slices_+slice]*frames_per_rotation_[set*slices_+slice]*rotations_per_reconstruction_, 
+              first_profile_in_reconstruction)->to_host();
+          }
+        } else {
+          // Fallback to golden angle (same as mode 3)
+          if( rotations_per_reconstruction_ == 0 ){	  
+            unsigned int first_profile_in_reconstruction = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
+            host_traj_recon_[set*slices_+slice] = *compute_radial_trajectory_golden_ratio_2d<float>
+              ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], 1, first_profile_in_reconstruction, GR_SMALLEST )->to_host();	
+          }
+          else{
+            unsigned int first_profile_in_reconstruction = 
+              std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]*frames_per_rotation_[set*slices_+slice]*rotations_per_reconstruction_+1);
+            host_traj_recon_[set*slices_+slice] = *compute_radial_trajectory_golden_ratio_2d<float>
+              ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], 
+                frames_per_rotation_[set*slices_+slice]*rotations_per_reconstruction_, first_profile_in_reconstruction, GR_SMALLEST )->to_host();
+          }
+        }
       }
       break;
 	
@@ -683,12 +737,26 @@ namespace Gadgetron{
 	
     case 2:
     case 3:
-    case 4:
       { 
         unsigned int first_profile_in_buffer = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
         result = compute_radial_trajectory_golden_ratio_2d<float>
           ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], 1, first_profile_in_buffer,
             (mode_==2) ? GR_ORIGINAL : GR_SMALLEST );
+      }
+      break;
+
+    case 4:
+      {
+        unsigned int first_profile_in_buffer = std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]+1);
+        if (fcrl_use_custom_angles) {
+          // FCRL: Use custom angles from CSV
+          result = fcrl_compute_custom_radial_trajectory_2d(
+            samples_per_profile_, profiles_per_frame_[set*slices_+slice], first_profile_in_buffer);
+        } else {
+          // Fallback to golden angle (same as mode 3)
+          result = compute_radial_trajectory_golden_ratio_2d<float>
+            ( samples_per_profile_, profiles_per_frame_[set*slices_+slice], 1, first_profile_in_buffer, GR_SMALLEST );
+        }
       }
       break;	
 	
@@ -745,7 +813,6 @@ namespace Gadgetron{
 	
     case 2:
     case 3:
-    case 4:
       { 
         unsigned int first_profile = 
           std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]*
@@ -758,6 +825,31 @@ namespace Gadgetron{
             buffer_frames_per_rotation_[set*slices_+slice]*buffer_length_in_rotations_, 
             1, first_profile,
             (mode_==2) ? GR_ORIGINAL : GR_SMALLEST );
+      }
+      break;
+
+    case 4:
+      {
+        unsigned int first_profile = 
+          std::max(0L, profile_offset-profiles_per_frame_[set*slices_+slice]*
+                   buffer_frames_per_rotation_[set*slices_+slice]*
+                   buffer_length_in_rotations_+1);
+
+        if (fcrl_use_custom_angles) {
+          // FCRL: Use custom angles from CSV
+          return fcrl_compute_custom_radial_trajectory_2d(
+            samples_per_profile_, 
+            profiles_per_frame_[set*slices_+slice]*
+            buffer_frames_per_rotation_[set*slices_+slice]*buffer_length_in_rotations_, 
+            first_profile);
+        } else {
+          // Fallback to golden angle (same as mode 3)
+          return compute_radial_trajectory_golden_ratio_2d<float>
+            ( samples_per_profile_, 
+              profiles_per_frame_[set*slices_+slice]*
+              buffer_frames_per_rotation_[set*slices_+slice]*buffer_length_in_rotations_, 
+              1, first_profile, GR_SMALLEST );
+        }
       }
       break;	
 	
@@ -881,7 +973,7 @@ namespace Gadgetron{
     buffer_frames_per_rotation_[set*slices_+slice] = buffer_frames_per_rotation.value();
 
     if( buffer_frames_per_rotation_[set*slices_+slice] == 0 ){
-      if( mode_ == 2 || mode_ == 3 )
+      if( mode_ == 2 || mode_ == 3 || mode_ == 4 )
         buffer_frames_per_rotation_[set*slices_+slice] = 
           image_dimensions_recon_os_[0]/profiles_per_frame_[set*slices_+slice];
       else
@@ -900,5 +992,158 @@ namespace Gadgetron{
     }
 
     reconfigure_[set*slices_+slice] = false;
+  }
+
+  // FCRL: Load custom angles from CSV file
+  int gpuRadialPrepGadgetFCRL::fcrl_load_custom_angles_from_csv()
+  {
+    std::ifstream csv_file(fcrl_angles_csv_path_);
+    if (!csv_file.is_open()) {
+      GDEBUG("FCRL: Error opening CSV file: %s\n", fcrl_angles_csv_path_.c_str());
+      return GADGET_FAIL;
+    }
+
+    fcrl_custom_angles_deg.clear();
+    fcrl_custom_angles_rad.clear();
+
+    std::string line;
+    int line_num = 0;
+    int col_index_user_int_1 = -1;
+
+    // Read header line to find user_int_1 column
+    if (std::getline(csv_file, line)) {
+      std::stringstream ss(line);
+      std::string cell;
+      int col = 0;
+      while (std::getline(ss, cell, ',')) {
+        // Trim whitespace
+        cell.erase(0, cell.find_first_not_of(" \t\r\n"));
+        cell.erase(cell.find_last_not_of(" \t\r\n") + 1);
+        if (cell == "user_int_1") {
+          col_index_user_int_1 = col;
+          break;
+        }
+        col++;
+      }
+      line_num++;
+    }
+
+    if (col_index_user_int_1 == -1) {
+      GDEBUG("FCRL: Could not find 'user_int_1' column in CSV header\n");
+      csv_file.close();
+      return GADGET_FAIL;
+    }
+
+    GDEBUG("FCRL: Found user_int_1 at column %d\n", col_index_user_int_1);
+
+    // Read data lines
+    while (std::getline(csv_file, line)) {
+      line_num++;
+      std::stringstream ss(line);
+      std::string cell;
+      int col = 0;
+      float angle_deg = 0.0f;
+      bool found = false;
+
+      while (std::getline(ss, cell, ',')) {
+        if (col == col_index_user_int_1) {
+          try {
+            angle_deg = std::stof(cell);
+            found = true;
+          } catch (...) {
+            GDEBUG("FCRL: Warning: Could not parse angle on line %d: %s\n", line_num, cell.c_str());
+          }
+          break;
+        }
+        col++;
+      }
+
+      if (found) {
+        fcrl_custom_angles_deg.push_back(angle_deg);
+        fcrl_custom_angles_rad.push_back(angle_deg * M_PI / 180.0f);
+      }
+    }
+
+    csv_file.close();
+    fcrl_total_angles = fcrl_custom_angles_rad.size();
+
+    if (fcrl_total_angles == 0) {
+      GDEBUG("FCRL: No angles loaded from CSV\n");
+      return GADGET_FAIL;
+    }
+
+    return GADGET_OK;
+  }
+
+  // FCRL: Get custom angle for given acquisition index
+  float gpuRadialPrepGadgetFCRL::fcrl_get_custom_angle(long acq_index)
+  {
+    if (fcrl_use_custom_angles && acq_index >= 0 && acq_index < (long)fcrl_total_angles) {
+      return fcrl_custom_angles_rad[acq_index];
+    }
+    // Fallback to small golden angle if index out of range
+    const float small_golden_angle = M_PI * (3.0f - std::sqrt(5.0f)); // ~2.399963 radians (~137.5 degrees)
+    return acq_index * small_golden_angle;
+  }
+
+  // FCRL: Compute custom angle radial trajectory for mode 4
+  boost::shared_ptr< cuNDArray<floatd2> > gpuRadialPrepGadgetFCRL::fcrl_compute_custom_radial_trajectory_2d(
+    long num_samples_per_profile, long num_profiles, long first_profile_index)
+  {
+    GDEBUG("FCRL: Computing custom trajectory: samples=%ld, profiles=%ld, first_idx=%ld\n", 
+           num_samples_per_profile, num_profiles, first_profile_index);
+    
+    // Match the format of compute_radial_trajectory_golden_ratio_2d:
+    // dims = [samples_per_profile * profiles_per_frame, num_frames]
+    // For our use case: profiles_per_frame = num_profiles, num_frames = 1
+    long samples_per_frame = num_samples_per_profile * num_profiles;
+    
+    std::vector<size_t> dims;
+    dims.push_back(samples_per_frame);
+    dims.push_back(1);  // num_frames = 1
+    
+    boost::shared_ptr< hoNDArray<floatd2> > host_traj(new hoNDArray<floatd2>(dims));
+    if (!host_traj.get()) {
+      GDEBUG("FCRL: ERROR - Failed to allocate host trajectory array\n");
+      return boost::shared_ptr< cuNDArray<floatd2> >();
+    }
+    
+    float sample_scale = 1.0f / (float)num_samples_per_profile;
+    
+    for (long profile = 0; profile < num_profiles; profile++) {
+      long global_profile_idx = first_profile_index + profile;
+      float angle = fcrl_get_custom_angle(global_profile_idx);
+      
+      if (profile < 3) { // Debug first few angles
+        GDEBUG("FCRL: Profile %ld (global %ld) angle = %.4f rad (%.2f deg)\n", 
+               profile, global_profile_idx, angle, angle * 180.0f / M_PI);
+      }
+      
+      float cos_angle = std::cos(angle);
+      float sin_angle = std::sin(angle);
+      
+      for (long sample = 0; sample < num_samples_per_profile; sample++) {
+        // Match the coordinate computation from golden ratio kernel:
+        // sample_pos = (sample_idx - bias) * cos/sin(angle) / samples_per_profile
+        float bias = num_samples_per_profile * 0.5f;
+        float sample_pos_x = (sample - bias) * cos_angle * sample_scale;
+        float sample_pos_y = (sample - bias) * sin_angle * sample_scale;
+        
+        // Linear index matching golden ratio layout: sample + profile * samples_per_profile
+        size_t idx = sample + profile * num_samples_per_profile;
+        (*host_traj)[idx][0] = sample_pos_x;
+        (*host_traj)[idx][1] = sample_pos_y;
+      }
+    }
+    
+    GDEBUG("FCRL: Creating cuNDArray from host trajectory, total elements=%ld\n", samples_per_frame);
+    boost::shared_ptr< cuNDArray<floatd2> > result(new cuNDArray<floatd2>(*host_traj));
+    if (!result.get()) {
+      GDEBUG("FCRL: ERROR - Failed to create cuNDArray\n");
+      return boost::shared_ptr< cuNDArray<floatd2> >();
+    }
+    
+    GDEBUG("FCRL: Custom trajectory successfully created\n");
+    return result;
   }
 }

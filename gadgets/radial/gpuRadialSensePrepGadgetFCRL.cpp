@@ -41,7 +41,7 @@ namespace Gadgetron{
     cuSenseBuffer<float,2> *acc_buffer = (this->buffer_using_solver_) ? 
       &this->acc_buffer_sense_cg_[set*this->slices_+slice] : &this->acc_buffer_sense_[set*this->slices_+slice];
 
-    if( buffer_using_solver_ && ( mode_ == 2 || mode_ == 3 ) ){
+    if( buffer_using_solver_ && ( mode_ == 2 || mode_ == 3 || mode_ == 4 ) ){
       static_cast<cuSenseBufferCg<float,2>*>( acc_buffer )->preprocess
         ( calculate_trajectory_for_rhs( this->profiles_counter_global_[set*this->slices_+slice] - ((new_frame) ? 1 : 0), set, slice).get());
     }
