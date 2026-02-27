@@ -227,7 +227,7 @@ namespace Gadgetron{
     int fcrl_load_custom_angles_from_csv();
     float fcrl_get_custom_angle(long acq_index);
     boost::shared_ptr< cuNDArray<floatd2> > fcrl_compute_custom_radial_trajectory_2d(
-      long num_samples_per_profile, long num_profiles, long first_profile_index);
+      long num_samples_per_profile, long num_profiles_per_frame, long num_frames, long first_profile_index);
 
   private:
 
