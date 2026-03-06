@@ -99,7 +99,6 @@ namespace Gadgetron{
     GADGET_PROPERTY(profiles_per_frame, int, "Profiles per frame", 0);
     GADGET_PROPERTY(frames_per_rotation, int, "Frames per rotation", 0);
     GADGET_PROPERTY(buffer_frames_per_rotation, int, "Frames per rotation in buffer", 0);
-    GADGET_PROPERTY(fcrl_angles_csv_path, std::string, "Path to CSV file with custom angles (mode 4)", "");
 
     virtual int process_config(ACE_Message_Block *mb);
 
@@ -217,14 +216,13 @@ namespace Gadgetron{
     std::map<unsigned int, std::queue<std::unique_ptr<ImageHeaderMessage>>> image_headers_queue_;
 
     // FCRL custom angle support (mode 4)
+    // Angles are read from user_int[1] of each acquisition header at runtime
     std::vector<float> fcrl_custom_angles_deg;
     std::vector<float> fcrl_custom_angles_rad;
-    std::string fcrl_angles_csv_path_;
     bool fcrl_use_custom_angles;
     size_t fcrl_total_angles;
 
-    // FCRL helper function to load custom angles from CSV
-    int fcrl_load_custom_angles_from_csv();
+    // FCRL helper functions
     float fcrl_get_custom_angle(long acq_index);
     boost::shared_ptr< cuNDArray<floatd2> > fcrl_compute_custom_radial_trajectory_2d(
       long num_samples_per_profile, long num_profiles_per_frame, long num_frames, long first_profile_index);

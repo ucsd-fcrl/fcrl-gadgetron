@@ -15,8 +15,6 @@
 #include <vector>
 #include <cmath>
 #include <memory>
-#include <fstream>
-#include <sstream>
 
 namespace Gadgetron{
 
@@ -242,21 +240,14 @@ namespace Gadgetron{
     }
 
     // FCRL: Initialize custom angle support for mode 4
-    fcrl_use_custom_angles = false;
+    // Angles will be read from user_int[1] of each acquisition header in process()
+    fcrl_use_custom_angles = (mode_ == 4);
     fcrl_total_angles = 0;
-    fcrl_angles_csv_path_ = fcrl_angles_csv_path.value();
+    fcrl_custom_angles_deg.clear();
+    fcrl_custom_angles_rad.clear();
 
-    if (mode_ == 4 && !fcrl_angles_csv_path_.empty()) {
-      GDEBUG("FCRL: Mode 4 detected, loading custom angles from: %s\n", fcrl_angles_csv_path_.c_str());
-      if (fcrl_load_custom_angles_from_csv() != GADGET_OK) {
-        GDEBUG("FCRL: Failed to load custom angles from CSV. Falling back to golden angle.\n");
-        fcrl_use_custom_angles = false;
-      } else {
-        fcrl_use_custom_angles = true;
-        GDEBUG("FCRL: Successfully loaded %zu custom angles\n", fcrl_total_angles);
-      }
-    } else if (mode_ == 4) {
-      GDEBUG("FCRL: Mode 4 detected but no CSV path provided. Using golden angle.\n");
+    if (mode_ == 4) {
+      GDEBUG("FCRL: Mode 4 detected. Custom angles will be read from user_int[1] of each acquisition header.\n");
     }
 
     return GADGET_OK;
@@ -278,6 +269,24 @@ namespace Gadgetron{
     unsigned int profile = m1->getObjectPtr()->idx.kspace_encode_step_1;
     unsigned int slice = m1->getObjectPtr()->idx.slice;
     unsigned int set = m1->getObjectPtr()->idx.set;
+
+    // FCRL: Read custom angle from user_int[1] for mode 4
+    // Raw user_int[1] = angle_in_radians * 10000
+    if (mode_ == 4) {
+      float angle_rad = (float)m1->getObjectPtr()->user_int[1] / 10000.0f;
+      // Wrap to [0, 2*PI)
+      angle_rad = fmod(angle_rad, (float)(2.0 * M_PI));
+      if (angle_rad < 0) angle_rad += (float)(2.0 * M_PI);
+      float angle_deg = angle_rad * 180.0f / M_PI;
+      fcrl_custom_angles_deg.push_back(angle_deg);
+      fcrl_custom_angles_rad.push_back(angle_rad);
+      fcrl_total_angles = fcrl_custom_angles_rad.size();
+      
+      if (fcrl_total_angles <= 5 || fcrl_total_angles % 1000 == 0) {
+        GDEBUG("FCRL: Acq #%zu user_int[1] = %d -> %.4f rad (%.2f deg)\n",
+               fcrl_total_angles, m1->getObjectPtr()->user_int[1], angle_rad, angle_deg);
+      }
+    }
 
     // Only when the first profile arrives, do we know the #samples/profile
     //
@@ -993,87 +1002,6 @@ namespace Gadgetron{
     }
 
     reconfigure_[set*slices_+slice] = false;
-  }
-
-  // FCRL: Load custom angles from CSV file
-  int gpuRadialPrepGadgetFCRL::fcrl_load_custom_angles_from_csv()
-  {
-    std::ifstream csv_file(fcrl_angles_csv_path_);
-    if (!csv_file.is_open()) {
-      GDEBUG("FCRL: Error opening CSV file: %s\n", fcrl_angles_csv_path_.c_str());
-      return GADGET_FAIL;
-    }
-
-    fcrl_custom_angles_deg.clear();
-    fcrl_custom_angles_rad.clear();
-
-    std::string line;
-    int line_num = 0;
-    int col_index_user_int_1 = -1;
-
-    // Read header line to find user_int_1 column
-    if (std::getline(csv_file, line)) {
-      std::stringstream ss(line);
-      std::string cell;
-      int col = 0;
-      while (std::getline(ss, cell, ',')) {
-        // Trim whitespace
-        cell.erase(0, cell.find_first_not_of(" \t\r\n"));
-        cell.erase(cell.find_last_not_of(" \t\r\n") + 1);
-        if (cell == "user_int_1") {
-          col_index_user_int_1 = col;
-          break;
-        }
-        col++;
-      }
-      line_num++;
-    }
-
-    if (col_index_user_int_1 == -1) {
-      GDEBUG("FCRL: Could not find 'user_int_1' column in CSV header\n");
-      csv_file.close();
-      return GADGET_FAIL;
-    }
-
-    GDEBUG("FCRL: Found user_int_1 at column %d\n", col_index_user_int_1);
-
-    // Read data lines
-    while (std::getline(csv_file, line)) {
-      line_num++;
-      std::stringstream ss(line);
-      std::string cell;
-      int col = 0;
-      float angle_deg = 0.0f;
-      bool found = false;
-
-      while (std::getline(ss, cell, ',')) {
-        if (col == col_index_user_int_1) {
-          try {
-            angle_deg = std::stof(cell);
-            found = true;
-          } catch (...) {
-            GDEBUG("FCRL: Warning: Could not parse angle on line %d: %s\n", line_num, cell.c_str());
-          }
-          break;
-        }
-        col++;
-      }
-
-      if (found) {
-        fcrl_custom_angles_deg.push_back(angle_deg);
-        fcrl_custom_angles_rad.push_back(angle_deg * M_PI / 180.0f);
-      }
-    }
-
-    csv_file.close();
-    fcrl_total_angles = fcrl_custom_angles_rad.size();
-
-    if (fcrl_total_angles == 0) {
-      GDEBUG("FCRL: No angles loaded from CSV\n");
-      return GADGET_FAIL;
-    }
-
-    return GADGET_OK;
   }
 
   // FCRL: Get custom angle for given acquisition index
