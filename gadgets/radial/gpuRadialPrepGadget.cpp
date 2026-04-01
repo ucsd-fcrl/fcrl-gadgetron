@@ -239,14 +239,21 @@ namespace Gadgetron{
     }
 
     // FCRL: Initialize custom angle support for mode 4
-    // Angles will be read from user_int[1] of each acquisition header in process()
+    // Angles will be read from user_int[fcrl_custom_angle_user_int_index_] of each acquisition header in process()
+    fcrl_custom_angle_user_int_index_ = fcrl_custom_angle_user_int_index.value();
+    if (fcrl_custom_angle_user_int_index_ < 0 || fcrl_custom_angle_user_int_index_ >= ISMRMRD::ISMRMRD_USER_INTS) {
+      GDEBUG("FCRL: Invalid user_int index %d. Must be in range [0, %d). Using default 1.\n",
+             fcrl_custom_angle_user_int_index_, ISMRMRD::ISMRMRD_USER_INTS);
+      fcrl_custom_angle_user_int_index_ = 1;
+    }
     fcrl_use_custom_angles = (mode_ == 4);
     fcrl_total_angles = 0;
     fcrl_custom_angles_deg.clear();
     fcrl_custom_angles_rad.clear();
 
     if (mode_ == 4) {
-      GDEBUG("FCRL: Mode 4 detected. Custom angles will be read from user_int[1] of each acquisition header.\n");
+      GDEBUG("FCRL: Mode 4 detected. Custom angles will be read from user_int[%d] of each acquisition header.\n",
+             fcrl_custom_angle_user_int_index_);
     }
 
     return GADGET_OK;
@@ -269,10 +276,10 @@ namespace Gadgetron{
     unsigned int slice = m1->getObjectPtr()->idx.slice;
     unsigned int set = m1->getObjectPtr()->idx.set;
 
-    // FCRL: Read custom angle from user_int[1] for mode 4
-    // Raw user_int[1] = angle_in_radians * 10000
+    // FCRL: Read custom angle from user_int[fcrl_custom_angle_user_int_index_] for mode 4
+    // Raw user_int[index] = angle_in_radians * 10000
     if (mode_ == 4) {
-      float angle_rad = (float)m1->getObjectPtr()->user_int[1] / 10000.0f;
+      float angle_rad = (float)m1->getObjectPtr()->user_int[fcrl_custom_angle_user_int_index_] / 10000.0f;
       // Wrap to [0, 2*PI)
       angle_rad = fmod(angle_rad, (float)(2.0 * M_PI));
       if (angle_rad < 0) angle_rad += (float)(2.0 * M_PI);
@@ -282,8 +289,8 @@ namespace Gadgetron{
       fcrl_total_angles = fcrl_custom_angles_rad.size();
       
       if (fcrl_total_angles <= 5 || fcrl_total_angles % 1000 == 0) {
-        GDEBUG("FCRL: Acq #%zu user_int[1] = %d -> %.4f rad (%.2f deg)\n",
-               fcrl_total_angles, m1->getObjectPtr()->user_int[1], angle_rad, angle_deg);
+        GDEBUG("FCRL: Acq #%zu user_int[%d] = %d -> %.4f rad (%.2f deg)\n",
+               fcrl_total_angles, fcrl_custom_angle_user_int_index_, m1->getObjectPtr()->user_int[fcrl_custom_angle_user_int_index_], angle_rad, angle_deg);
       }
     }
 

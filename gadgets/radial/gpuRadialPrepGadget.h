@@ -99,6 +99,7 @@ namespace Gadgetron{
     GADGET_PROPERTY(profiles_per_frame, int, "Profiles per frame", 0);
     GADGET_PROPERTY(frames_per_rotation, int, "Frames per rotation", 0);
     GADGET_PROPERTY(buffer_frames_per_rotation, int, "Frames per rotation in buffer", 0);
+    GADGET_PROPERTY(fcrl_custom_angle_user_int_index, int, "Index of user_int slot containing custom angles for mode 4", 1);
 
     virtual int process_config(ACE_Message_Block *mb);
 
@@ -216,11 +217,12 @@ namespace Gadgetron{
     std::map<unsigned int, std::queue<std::unique_ptr<ImageHeaderMessage>>> image_headers_queue_;
 
     // FCRL custom angle support (mode 4)
-    // Angles are read from user_int[1] of each acquisition header at runtime
+    // Angles are read from user_int[fcrl_custom_angle_user_int_index_] of each acquisition header at runtime
     std::vector<float> fcrl_custom_angles_deg;
     std::vector<float> fcrl_custom_angles_rad;
     bool fcrl_use_custom_angles;
     size_t fcrl_total_angles;
+    int fcrl_custom_angle_user_int_index_;
 
     // FCRL helper functions
     float fcrl_get_custom_angle(long acq_index);
