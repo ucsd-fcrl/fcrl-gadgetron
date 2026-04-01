@@ -256,6 +256,17 @@ namespace Gadgetron{
              fcrl_custom_angle_user_int_index_);
     }
 
+    // ARKS spoke buffer initialization
+    arks_buffer_length_TRs_ = buffer_length_TRs.value();
+    arks_max_spokes_per_frame_ = max_spokes_per_frame.value();
+    arks_enabled_ = (mode_ == 4 && arks_buffer_length_TRs_ > 0);
+    arks_spoke_buffer_.clear();
+
+    if (arks_enabled_) {
+      GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
+             arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+    }
+
     return GADGET_OK;
   }
 
@@ -291,6 +302,38 @@ namespace Gadgetron{
       if (fcrl_total_angles <= 5 || fcrl_total_angles % 1000 == 0) {
         GDEBUG("FCRL: Acq #%zu user_int[%d] = %d -> %.4f rad (%.2f deg)\n",
                fcrl_total_angles, fcrl_custom_angle_user_int_index_, m1->getObjectPtr()->user_int[fcrl_custom_angle_user_int_index_], angle_rad, angle_deg);
+      }
+    }
+
+    // ARKS: Populate spoke buffer (mode 4 with buffer_length_TRs > 0)
+    if (arks_enabled_) {
+      unsigned int buf_key = set * slices_ + slice;
+      long current_tr = profiles_counter_global_[buf_key];
+
+      // Build ArksSpoke entry
+      ArksSpoke spoke;
+      spoke.tr_index = current_tr;
+      spoke.angle_rad = fcrl_custom_angles_rad.back();
+      memcpy(spoke.user_int, m1->getObjectPtr()->user_int, sizeof(int32_t) * ISMRMRD::ISMRMRD_USER_INTS);
+      spoke.slice = slice;
+      spoke.set = set;
+      spoke.data = std::unique_ptr<ProfileMessage>(duplicate_profile(m2));
+
+      arks_spoke_buffer_[buf_key].push_back(std::move(spoke));
+
+      // Evict spokes older than buffer window
+      auto &buf = arks_spoke_buffer_[buf_key];
+      while (!buf.empty() && buf.front().tr_index < current_tr - arks_buffer_length_TRs_) {
+        buf.pop_front();
+      }
+
+      // Periodic logging
+      if (current_tr <= 5 || current_tr % 1000 == 0) {
+        long oldest_tr = buf.empty() ? -1 : buf.front().tr_index;
+        long newest_tr = buf.empty() ? -1 : buf.back().tr_index;
+        size_t buf_size = buf.size();
+        GDEBUG("ARKS: [set=%u,slice=%u] buffer_size=%zu, TR_range=[%ld,%ld], current_TR=%ld\n",
+               set, slice, buf_size, oldest_tr, newest_tr, current_tr);
       }
     }
 

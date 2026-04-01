@@ -14,6 +14,7 @@
 #include <ismrmrd/ismrmrd.h>
 #include <complex>
 #include <queue>
+#include <deque>
 #include <map>
 #include <boost/shared_ptr.hpp>
 #include <boost/shared_array.hpp>
@@ -100,6 +101,10 @@ namespace Gadgetron{
     GADGET_PROPERTY(frames_per_rotation, int, "Frames per rotation", 0);
     GADGET_PROPERTY(buffer_frames_per_rotation, int, "Frames per rotation in buffer", 0);
     GADGET_PROPERTY(fcrl_custom_angle_user_int_index, int, "Index of user_int slot containing custom angles for mode 4", 1);
+
+    // ARKS spoke buffer configuration (active when buffer_length_TRs > 0 in mode 4)
+    GADGET_PROPERTY(buffer_length_TRs, int, "ARKS: spoke buffer depth in TR units (0=disabled)", 0);
+    GADGET_PROPERTY(max_spokes_per_frame, int, "ARKS: max spokes per recon frame", 256);
 
     virtual int process_config(ACE_Message_Block *mb);
 
@@ -228,6 +233,21 @@ namespace Gadgetron{
     float fcrl_get_custom_angle(long acq_index);
     boost::shared_ptr< cuNDArray<floatd2> > fcrl_compute_custom_radial_trajectory_2d(
       long num_samples_per_profile, long num_profiles_per_frame, long num_frames, long first_profile_index);
+
+    // ARKS spoke buffer — stores spokes with metadata for TR-based lookup
+    struct ArksSpoke {
+      long tr_index;
+      float angle_rad;
+      int32_t user_int[ISMRMRD::ISMRMRD_USER_INTS];
+      unsigned int slice;
+      unsigned int set;
+      std::unique_ptr<ProfileMessage> data;
+    };
+
+    long arks_buffer_length_TRs_;
+    long arks_max_spokes_per_frame_;
+    bool arks_enabled_;  // true when mode==4 && buffer_length_TRs > 0
+    std::map<unsigned int, std::deque<ArksSpoke>> arks_spoke_buffer_;
 
   private:
 
