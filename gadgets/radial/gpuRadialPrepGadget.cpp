@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
+#include <cstdarg>
 
 namespace Gadgetron{
 
@@ -23,10 +24,32 @@ namespace Gadgetron{
     , device_number_(-1)
     , mode_(-1)
     , samples_per_profile_(-1)
+    , arks_log_fp_(nullptr)
   {
   }
   
-  gpuRadialPrepGadget::~gpuRadialPrepGadget() {}
+  gpuRadialPrepGadget::~gpuRadialPrepGadget() {
+    if (arks_log_fp_) {
+      fclose(arks_log_fp_);
+      arks_log_fp_ = nullptr;
+    }
+  }
+
+  void gpuRadialPrepGadget::arks_log(const char* fmt, ...) {
+    if (!arks_log_fp_) return;
+    // timestamp
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm_buf;
+    localtime_r(&ts.tv_sec, &tm_buf);
+    fprintf(arks_log_fp_, "%02d-%02d %02d:%02d:%02d.%03ld ",
+            tm_buf.tm_mon+1, tm_buf.tm_mday, tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, ts.tv_nsec/1000000);
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(arks_log_fp_, fmt, args);
+    va_end(args);
+    fflush(arks_log_fp_);
+  }
   
   int gpuRadialPrepGadget::process_config(ACE_Message_Block* mb)
   {
@@ -262,12 +285,124 @@ namespace Gadgetron{
     arks_enabled_ = (mode_ == 4 && arks_buffer_length_TRs_ > 0);
     arks_spoke_buffer_.clear();
 
+    // ARKS file logging initialization
+    arks_log_fp_ = nullptr;
+    if (arks_enabled_ && arks_log_enabled.value()) {
+      std::string log_path = arks_log_file.value();
+      arks_log_fp_ = fopen(log_path.c_str(), "w");
+      if (arks_log_fp_) {
+        GDEBUG("ARKS: Log file opened: %s\n", log_path.c_str());
+        arks_log("ARKS log started. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
+                arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+      } else {
+        GDEBUG("ARKS: WARNING: Failed to open log file: %s\n", log_path.c_str());
+      }
+    }
+
     if (arks_enabled_) {
       GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
              arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
     }
 
     return GADGET_OK;
+  }
+
+  gpuRadialPrepGadget::ArksGatherResult
+  gpuRadialPrepGadget::arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
+                                           const int32_t* current_user_int)
+  {
+    ArksGatherResult result;
+    result.total_gathered = 0;
+
+    if (!arks_enabled_) return result;
+
+    unsigned int buf_key = set * slices_ + slice;
+    auto it = arks_spoke_buffer_.find(buf_key);
+    if (it == arks_spoke_buffer_.end() || it->second.empty()) return result;
+
+    const auto &buf = it->second;
+    long buf_oldest_tr = buf.front().tr_index;
+    long buf_newest_tr = buf.back().tr_index;
+
+    int n_samples = current_user_int[3];  // user_int[3] = N_samples
+    if (n_samples <= 0) return result;
+    int half_window = n_samples / 2;  // e.g. 9/2 = 4, so +/- 4 around target
+
+    // Iterate over lag slots: user_int[4] through user_int[7]
+    for (int lag_slot = 4; lag_slot <= 7; lag_slot++) {
+      int32_t lag = current_user_int[lag_slot];
+      if (lag <= 0) continue;  // skip unused lag slots
+
+      long target_tr = current_tr - lag;
+      long gather_start = target_tr - half_window;
+      long gather_end = target_tr + half_window;
+
+      // Check if target range is within buffer
+      if (gather_end < buf_oldest_tr || gather_start > buf_newest_tr) {
+        continue;
+      }
+
+      // Clamp to buffer bounds
+      if (gather_start < buf_oldest_tr) gather_start = buf_oldest_tr;
+      if (gather_end > buf_newest_tr) gather_end = buf_newest_tr;
+
+      // Binary search for gather_start in sorted deque (sorted by tr_index)
+      // The deque is monotonically increasing by tr_index
+      size_t lo = 0, hi = buf.size();
+      while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (buf[mid].tr_index < gather_start)
+          lo = mid + 1;
+        else
+          hi = mid;
+      }
+
+      // Collect spokes in [gather_start, gather_end]
+      int gathered_this_lag = 0;
+      for (size_t idx = lo; idx < buf.size() && buf[idx].tr_index <= gather_end; idx++) {
+        if (buf[idx].slice == slice && buf[idx].set == set) {
+          result.profiles.push_back(buf[idx].data.get());
+          result.angles_rad.push_back(buf[idx].angle_rad);
+          gathered_this_lag++;
+        }
+      }
+
+    }
+
+    result.total_gathered = result.profiles.size();
+    return result;
+  }
+
+  boost::shared_ptr< hoNDArray<floatd2> >
+  gpuRadialPrepGadget::arks_build_combined_trajectory_2d(const std::vector<float>& angles_rad)
+  {
+    long num_profiles = (long)angles_rad.size();
+    long total_samples = samples_per_profile_ * num_profiles;
+
+    std::vector<size_t> dims;
+    dims.push_back(total_samples);
+    dims.push_back(1);  // single frame
+
+    boost::shared_ptr< hoNDArray<floatd2> > host_traj(new hoNDArray<floatd2>(dims));
+    float sample_scale = 1.0f / (float)samples_per_profile_;
+
+    for (long p = 0; p < num_profiles; p++) {
+      // +PI offset to match the convention used in fcrl_compute_custom_radial_trajectory_2d
+      float angle = angles_rad[p] + (float)M_PI;
+      float cos_a = std::cos(angle);
+      float sin_a = std::sin(angle);
+      float bias = samples_per_profile_ * 0.5f;
+
+      for (long s = 0; s < samples_per_profile_; s++) {
+        float x = (s - bias) * cos_a * sample_scale;
+        float y = (s - bias) * sin_a * sample_scale;
+        size_t idx = p * samples_per_profile_ + s;
+        (*host_traj)[idx][0] = x;
+        (*host_traj)[idx][1] = y;
+      }
+    }
+
+    return host_traj;
   }
 
   int gpuRadialPrepGadget::
@@ -575,14 +710,84 @@ namespace Gadgetron{
         GDEBUG("Failed to extract frame data from queue\n");
         return GADGET_FAIL;
       }
-           
-      // The trajectory needs to be updated on the fly:
-      // - for golden ratio based acquisitions
-      // - when we are reconstructing frame-by-frame
-      
-      if( mode_ == 2 || mode_ == 3 || mode_ == 4 || rotations_per_reconstruction_ == 0 ){
-        calculate_trajectory_for_reconstruction
-          ( profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0), set, slice );
+
+      // ARKS Stage 3: Gather historical spokes and merge with current frame
+      bool arks_merged = false;
+      if (arks_enabled_) {
+        long profile_offset_arks = profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0);
+        ArksGatherResult gathered = arks_gather_spokes(profile_offset_arks, set, slice, m1->getObjectPtr()->user_int);
+
+        if (gathered.total_gathered > 0) {
+          long current_profiles = (long)recon_profiles_queue_[set*slices_+slice].size();
+          // recon queue was just emptied, so current_profiles=0; use profiles_per_reconstruction instead
+          current_profiles = profiles_per_frame_[set*slices_+slice];
+          if (rotations_per_reconstruction_ > 0)
+            current_profiles *= (frames_per_rotation_[set*slices_+slice] * rotations_per_reconstruction_);
+          long total_profiles = current_profiles + (long)gathered.total_gathered;
+          unsigned int ncoils = num_coils_[set*slices_+slice];
+
+          // Collect current window angles
+          std::vector<float> combined_angles;
+          long first_profile_idx = std::max(0L, profile_offset_arks - current_profiles + 1);
+          for (long i = 0; i < current_profiles; i++) {
+            combined_angles.push_back(fcrl_get_custom_angle(first_profile_idx + i));
+          }
+          // Append gathered historical angles
+          combined_angles.insert(combined_angles.end(),
+                                 gathered.angles_rad.begin(), gathered.angles_rad.end());
+
+          // Build combined data array: [total_profiles * spp, ncoils]
+          std::vector<size_t> combined_dims = {
+            (size_t)(total_profiles * samples_per_profile_), (size_t)ncoils
+          };
+          boost::shared_ptr< hoNDArray<float_complext> > combined(new hoNDArray<float_complext>(combined_dims));
+          memset(combined->get_data_ptr(), 0, combined->get_number_of_bytes());
+
+          // Copy current window data (layout: coil-major, each coil block = spp * current_profiles)
+          for (unsigned int c = 0; c < ncoils; c++) {
+            float_complext* src = samples_host->get_data_ptr() + c * samples_per_profile_ * current_profiles;
+            float_complext* dst = combined->get_data_ptr() + c * samples_per_profile_ * total_profiles;
+            memcpy(dst, src, samples_per_profile_ * current_profiles * sizeof(float_complext));
+          }
+
+          // Copy gathered historical spoke data
+          for (size_t g = 0; g < gathered.profiles.size(); g++) {
+            hoNDArray< std::complex<float> >* pdata = gathered.profiles[g]->getObjectPtr();
+            for (unsigned int c = 0; c < ncoils; c++) {
+              float_complext* dst = combined->get_data_ptr()
+                + c * samples_per_profile_ * total_profiles
+                + (current_profiles + (long)g) * samples_per_profile_;
+              std::complex<float>* src = pdata->get_data_ptr() + c * pdata->get_size(0);
+              memcpy(dst, src, samples_per_profile_ * sizeof(float_complext));
+            }
+          }
+
+          samples_host = combined;
+
+          // Build combined trajectory from explicit angle list
+          boost::shared_ptr< hoNDArray<floatd2> > combined_traj = arks_build_combined_trajectory_2d(combined_angles);
+          host_traj_recon_[set*slices_+slice] = *combined_traj;
+
+          // Compute DCW via iterative estimation on GPU
+          cuNDArray<floatd2> cu_traj(*combined_traj);
+          uint64d2 matrix_size(image_dimensions_recon_[0], image_dimensions_recon_[1]);
+          std::shared_ptr< cuNDArray<float> > cu_dcw = Gadgetron::estimate_dcw<float, 2>(
+            cu_traj, matrix_size, oversampling_factor_, 10, kernel_width_);
+          host_weights_recon_[set*slices_+slice] = *(cu_dcw->to_host());
+
+          arks_merged = true;
+
+          arks_log("RECON [set=%u,slice=%u] TR=%ld current=%ld gathered=%zu total=%ld\n",
+                   set, slice, profile_offset_arks, current_profiles, gathered.total_gathered, total_profiles);
+        }
+      }
+
+      // Normal trajectory/DCW path (non-ARKS or no gathered spokes)
+      if (!arks_merged) {
+        if( mode_ == 2 || mode_ == 3 || mode_ == 4 || rotations_per_reconstruction_ == 0 ){
+          calculate_trajectory_for_reconstruction
+            ( profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0), set, slice );
+        }
       }
       
       // Set up Sense job

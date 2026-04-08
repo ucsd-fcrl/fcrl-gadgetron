@@ -10,12 +10,15 @@
 #include "cuBuffer.h"
 #include "cuSenseBufferCg.h"
 #include "cuSpiritBuffer.h"
+#include "cuSDC.h"
 
 #include <ismrmrd/ismrmrd.h>
 #include <complex>
 #include <queue>
 #include <deque>
 #include <map>
+#include <cstdio>
+#include <algorithm>
 #include <boost/shared_ptr.hpp>
 #include <boost/shared_array.hpp>
 
@@ -105,6 +108,8 @@ namespace Gadgetron{
     // ARKS spoke buffer configuration (active when buffer_length_TRs > 0 in mode 4)
     GADGET_PROPERTY(buffer_length_TRs, int, "ARKS: spoke buffer depth in TR units (0=disabled)", 0);
     GADGET_PROPERTY(max_spokes_per_frame, int, "ARKS: max spokes per recon frame", 256);
+    GADGET_PROPERTY(arks_log_enabled, bool, "ARKS: enable file logging", false);
+    GADGET_PROPERTY(arks_log_file, std::string, "ARKS: log file path", "/tmp/arks_log.txt");
 
     virtual int process_config(ACE_Message_Block *mb);
 
@@ -244,10 +249,29 @@ namespace Gadgetron{
       std::unique_ptr<ProfileMessage> data;
     };
 
+    // ARKS gather result — collected historical spokes for one frame
+    struct ArksGatherResult {
+      std::vector<ProfileMessage*> profiles;  // borrowed pointers (owned by arks_spoke_buffer_)
+      std::vector<float> angles_rad;
+      size_t total_gathered;                  // profiles.size()
+    };
+
+    // Gather historical spokes from buffer using lag metadata in user_int[4..7]
+    ArksGatherResult arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
+                                        const int32_t* current_user_int);
+
+    // Build radial trajectory from explicit angle list (for ARKS combined spoke set)
+    boost::shared_ptr< hoNDArray<floatd2> > arks_build_combined_trajectory_2d(
+        const std::vector<float>& angles_rad);
+
     long arks_buffer_length_TRs_;
     long arks_max_spokes_per_frame_;
     bool arks_enabled_;  // true when mode==4 && buffer_length_TRs > 0
     std::map<unsigned int, std::deque<ArksSpoke>> arks_spoke_buffer_;
+
+    // ARKS file logging
+    FILE* arks_log_fp_;
+    void arks_log(const char* fmt, ...);
 
   private:
 

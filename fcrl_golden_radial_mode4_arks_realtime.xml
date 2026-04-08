@@ -45,7 +45,7 @@
       <property><name>mode</name><value>4</value></property>
       <property><name>fcrl_custom_angle_user_int_index</name><value>2</value></property>
       <property><name>profiles_per_frame</name><value>32</value></property>
-      <property><name>rotations_per_reconstruction</name><value>32</value></property>
+      <property><name>rotations_per_reconstruction</name><value>0</value></property>
       <property><name>buffer_frames_per_rotation</name><value>32</value></property>
       <property><name>buffer_length_in_rotations</name><value>1</value></property>
       <property><name>buffer_convolution_kernel_width</name><value>5.5</value></property>
@@ -55,6 +55,9 @@
       <!-- ARKS spoke buffer -->
       <property><name>buffer_length_TRs</name><value>5000</value></property>
       <property><name>max_spokes_per_frame</name><value>256</value></property>
+      <!-- ARKS file logging -->
+      <property><name>arks_log_enabled</name><value>true</value></property>
+      <property><name>arks_log_file</name><value>/work/arks_log.txt</value></property>
     </gadget>
     
     <gadget>
