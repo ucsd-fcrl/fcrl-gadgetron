@@ -768,12 +768,11 @@ namespace Gadgetron{
           boost::shared_ptr< hoNDArray<floatd2> > combined_traj = arks_build_combined_trajectory_2d(combined_angles);
           host_traj_recon_[set*slices_+slice] = *combined_traj;
 
-          // Compute DCW via iterative estimation on GPU
-          cuNDArray<floatd2> cu_traj(*combined_traj);
-          uint64d2 matrix_size(image_dimensions_recon_[0], image_dimensions_recon_[1]);
-          std::shared_ptr< cuNDArray<float> > cu_dcw = Gadgetron::estimate_dcw<float, 2>(
-            cu_traj, matrix_size, oversampling_factor_, 10, kernel_width_);
-          host_weights_recon_[set*slices_+slice] = *(cu_dcw->to_host());
+          // Compute DCW using golden ratio analytical formula (stable for non-uniform angular distributions)
+          host_weights_recon_[set*slices_+slice] = *compute_radial_dcw_golden_ratio_2d<float>(
+            samples_per_profile_, total_profiles, oversampling_factor_,
+            1.0f / (float(samples_per_profile_) / float(image_dimensions_recon_[0])),
+            0, GR_SMALLEST)->to_host();
 
           arks_merged = true;
 
@@ -788,6 +787,9 @@ namespace Gadgetron{
           calculate_trajectory_for_reconstruction
             ( profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0), set, slice );
         }
+        // Always recompute DCW to match trajectory dimensions
+        // (ARKS frames may have changed host_weights_recon_ to a different size)
+        calculate_density_compensation_for_reconstruction(set, slice);
       }
       
       // Set up Sense job
