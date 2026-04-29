@@ -324,49 +324,61 @@ namespace Gadgetron{
     long buf_oldest_tr = buf.front().tr_index;
     long buf_newest_tr = buf.back().tr_index;
 
-    int n_samples = current_user_int[3];  // user_int[3] = N_samples
+    int n_samples = current_user_int[3];  // user_int[3] = N_samples (e.g. 9)
     if (n_samples <= 0) return result;
-    int half_window = n_samples / 2;  // e.g. 9/2 = 4, so +/- 4 around target
+
+    // Dedup across all lags by tr_index
+    std::set<long> seen_trs;
+
+    // Helper: gather spokes in [range_start, range_end] from buffer
+    auto gather_range = [&](long range_start, long range_end) {
+      if (range_end < buf_oldest_tr || range_start > buf_newest_tr) return;
+      if (range_start < buf_oldest_tr) range_start = buf_oldest_tr;
+      if (range_end > buf_newest_tr) range_end = buf_newest_tr;
+
+      // Binary search for range_start
+      size_t lo = 0, hi = buf.size();
+      while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (buf[mid].tr_index < range_start)
+          lo = mid + 1;
+        else
+          hi = mid;
+      }
+
+      for (size_t idx = lo; idx < buf.size() && buf[idx].tr_index <= range_end; idx++) {
+        if (buf[idx].slice == slice && buf[idx].set == set) {
+          if (seen_trs.insert(buf[idx].tr_index).second) {
+            result.profiles.push_back(buf[idx].data.get());
+            result.angles_rad.push_back(buf[idx].angle_rad);
+            result.tr_indices.push_back(buf[idx].tr_index);
+          }
+        }
+      }
+    };
+
+    // Current frame spans [current_tr - ppf + 1, current_tr]
+    long ppf = profiles_per_frame_[set * slices_ + slice];
+    if (rotations_per_reconstruction_ > 0)
+      ppf *= (frames_per_rotation_[set * slices_ + slice] * rotations_per_reconstruction_);
 
     // Iterate over lag slots: user_int[4] through user_int[7]
     for (int lag_slot = 4; lag_slot <= 7; lag_slot++) {
       int32_t lag = current_user_int[lag_slot];
       if (lag <= 0) continue;  // skip unused lag slots
 
+      // Past side: correlation point ± n_samples = 2*n_samples+1 spokes (e.g. 19)
       long target_tr = current_tr - lag;
-      long gather_start = target_tr - half_window;
-      long gather_end = target_tr + half_window;
+      gather_range(target_tr - n_samples, target_tr + n_samples);
 
-      // Check if target range is within buffer
-      if (gather_end < buf_oldest_tr || gather_start > buf_newest_tr) {
-        continue;
+      // Current side: spokes near current time but OUTSIDE the current frame
+      // Current frame spans [current_tr - ppf + 1, current_tr], so gather
+      // from [current_tr - n_samples, current_tr - ppf] to avoid overlap.
+      long cur_end = current_tr - ppf;  // last TR before current frame
+      long cur_start = current_tr - n_samples;
+      if (cur_end >= cur_start) {
+        gather_range(cur_start, cur_end);
       }
-
-      // Clamp to buffer bounds
-      if (gather_start < buf_oldest_tr) gather_start = buf_oldest_tr;
-      if (gather_end > buf_newest_tr) gather_end = buf_newest_tr;
-
-      // Binary search for gather_start in sorted deque (sorted by tr_index)
-      // The deque is monotonically increasing by tr_index
-      size_t lo = 0, hi = buf.size();
-      while (lo < hi) {
-        size_t mid = (lo + hi) / 2;
-        if (buf[mid].tr_index < gather_start)
-          lo = mid + 1;
-        else
-          hi = mid;
-      }
-
-      // Collect spokes in [gather_start, gather_end]
-      int gathered_this_lag = 0;
-      for (size_t idx = lo; idx < buf.size() && buf[idx].tr_index <= gather_end; idx++) {
-        if (buf[idx].slice == slice && buf[idx].set == set) {
-          result.profiles.push_back(buf[idx].data.get());
-          result.angles_rad.push_back(buf[idx].angle_rad);
-          gathered_this_lag++;
-        }
-      }
-
     }
 
     result.total_gathered = result.profiles.size();

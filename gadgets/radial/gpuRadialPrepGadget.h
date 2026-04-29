@@ -17,6 +17,7 @@
 #include <queue>
 #include <deque>
 #include <map>
+#include <set>
 #include <cstdio>
 #include <algorithm>
 #include <boost/shared_ptr.hpp>
@@ -253,6 +254,7 @@ namespace Gadgetron{
     struct ArksGatherResult {
       std::vector<ProfileMessage*> profiles;  // borrowed pointers (owned by arks_spoke_buffer_)
       std::vector<float> angles_rad;
+      std::vector<long> tr_indices;           // TR index of each gathered spoke
       size_t total_gathered;                  // profiles.size()
     };
 
