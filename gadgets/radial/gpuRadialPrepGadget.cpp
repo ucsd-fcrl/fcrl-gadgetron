@@ -328,8 +328,8 @@ namespace Gadgetron{
     if (n_samples <= 0) return result;
     int half_window = n_samples / 2;  // e.g. 9/2 = 4, so +/- 4 around target
 
-    // Iterate over lag slots: user_int[4] through user_int[7]
-    for (int lag_slot = 4; lag_slot <= 7; lag_slot++) {
+    // Iterate over lag slots: user_int[5] through user_int[7]
+    for (int lag_slot = 5; lag_slot <= 7; lag_slot++) {
       int32_t lag = current_user_int[lag_slot];
       if (lag <= 0) continue;  // skip unused lag slots
 

@@ -44,7 +44,7 @@
       <property><name>deviceno</name><value>1</value></property>
       <property><name>mode</name><value>4</value></property>
       <property><name>fcrl_custom_angle_user_int_index</name><value>4</value></property>
-      <property><name>profiles_per_frame</name><value>32</value></property>
+      <property><name>profiles_per_frame</name><value>10</value></property>
       <property><name>rotations_per_reconstruction</name><value>0</value></property>
       <property><name>buffer_frames_per_rotation</name><value>32</value></property>
       <property><name>buffer_length_in_rotations</name><value>1</value></property>
