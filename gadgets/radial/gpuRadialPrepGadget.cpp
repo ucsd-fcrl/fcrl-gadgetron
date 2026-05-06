@@ -324,7 +324,7 @@ namespace Gadgetron{
     long buf_oldest_tr = buf.front().tr_index;
     long buf_newest_tr = buf.back().tr_index;
 
-    int n_samples = current_user_int[3];  // user_int[3] = N_samples
+    int n_samples = 19;  // user_int[3] = N_samples
     if (n_samples <= 0) return result;
     int half_window = n_samples / 2;  // e.g. 9/2 = 4, so +/- 4 around target
 
