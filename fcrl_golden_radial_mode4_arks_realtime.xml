@@ -44,7 +44,7 @@
       <property><name>deviceno</name><value>1</value></property>
       <property><name>mode</name><value>4</value></property>
       <property><name>fcrl_custom_angle_user_int_index</name><value>2</value></property>
-      <property><name>profiles_per_frame</name><value>32</value></property>
+      <property><name>profiles_per_frame</name><value>10</value></property>
       <property><name>rotations_per_reconstruction</name><value>0</value></property>
       <property><name>buffer_frames_per_rotation</name><value>32</value></property>
       <property><name>buffer_length_in_rotations</name><value>1</value></property>
@@ -54,12 +54,14 @@
       <property><name>reconstruction_os_factor_y</name><value>1.5</value></property>
       <!-- ARKS spoke buffer -->
       <property><name>buffer_length_TRs</name><value>5000</value></property>
-      <property><name>max_spokes_per_frame</name><value>256</value></property>
+      <!-- Lag slot indices: 0-6 = user_int[0..6], 8-15 = user_float[0..7] (index 7 reserved). -->
+      <!-- Range syntax (e.g. "6-15") auto-skips index 7. FID02181: lags in user_int[6] + user_float[0..7]. -->
+      <property><name>arks_lag_indices</name><value></value></property>
       <!-- ARKS file logging -->
       <property><name>arks_log_enabled</name><value>true</value></property>
       <property><name>arks_log_file</name><value>/work/arks_log.txt</value></property>
     </gadget>
-    
+
     <gadget>
       <name>slice0</name>
       <dll>gadgetron_gpuparallelmri</dll>

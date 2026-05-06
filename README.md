@@ -69,6 +69,11 @@ gadgetron -p9030
 /work/recon.sh -i ...dat -c <xml> -p 9088 -u
 ```
 
+/work/recon.sh \
+  -i /projects/arks_recon/dat_files/meas_MID00129_FID01458_fcrl_beat_arks_RespOFF_ARKS_9spokes_SAXSlc.dat \
+  -c fcrl_golden_radial_mode4_arks_realtime.xml \
+  -u
+
 **Flags:**
 - `-i` input — `.dat` (runs full pipeline) or `_2.h5` (skips preprocessing). Filename must contain `FID<num>`.
 - `-c` XML config — basename (looked up in `/work/gadgetron_source/`) or full path. **Auto-copied** to `/opt/conda/envs/gadgetron/share/gadgetron/config/` every run, so live edits always take effect.

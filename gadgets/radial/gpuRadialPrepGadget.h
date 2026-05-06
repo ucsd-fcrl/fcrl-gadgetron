@@ -108,7 +108,9 @@ namespace Gadgetron{
 
     // ARKS spoke buffer configuration (active when buffer_length_TRs > 0 in mode 4)
     GADGET_PROPERTY(buffer_length_TRs, int, "ARKS: spoke buffer depth in TR units (0=disabled)", 0);
-    GADGET_PROPERTY(max_spokes_per_frame, int, "ARKS: max spokes per recon frame", 256);
+    // Lag slot indices (unified addressing: 0-6 = user_int[0..6], 8-15 = user_float[0..7], index 7 reserved/rejected)
+    // Accepts comma-separated list and/or ranges, e.g. "6,8,9,10" or "6-15" or "6,8-15"
+    GADGET_PROPERTY(arks_lag_indices, std::string, "ARKS: lag slot indices in [0,6] union [8,15], list and/or range", "");
     GADGET_PROPERTY(arks_log_enabled, bool, "ARKS: enable file logging", false);
     GADGET_PROPERTY(arks_log_file, std::string, "ARKS: log file path", "/tmp/arks_log.txt");
 
@@ -258,17 +260,25 @@ namespace Gadgetron{
       size_t total_gathered;                  // profiles.size()
     };
 
-    // Gather historical spokes from buffer using lag metadata in user_int[4..7]
+    // Gather historical spokes from buffer using lag metadata read from arks_lag_indices_
     ArksGatherResult arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
-                                        const int32_t* current_user_int);
+                                        const ISMRMRD::AcquisitionHeader* current_hdr);
 
     // Build radial trajectory from explicit angle list (for ARKS combined spoke set)
     boost::shared_ptr< hoNDArray<floatd2> > arks_build_combined_trajectory_2d(
         const std::vector<float>& angles_rad);
 
+    // Unified slot read: idx in [0,6] -> user_int[idx]; idx in [8,15] -> (int32_t)user_float[idx-8].
+    // idx==7 is reserved and returns 0 (rejected at process_config).
+    static int32_t read_user_slot(const ISMRMRD::AcquisitionHeader* hdr, int idx);
+
+    // Parse comma-separated list / range string (e.g. "6,8-10,12") into validated indices.
+    // Range syntax auto-skips index 7. Explicit listing of 7 throws.
+    static std::vector<int> parse_lag_indices(const std::string& spec);
+
     long arks_buffer_length_TRs_;
-    long arks_max_spokes_per_frame_;
     bool arks_enabled_;  // true when mode==4 && buffer_length_TRs > 0
+    std::vector<int> arks_lag_indices_;  // configured lag slots (0..6 or 8..15)
     std::map<unsigned int, std::deque<ArksSpoke>> arks_spoke_buffer_;
 
     // ARKS file logging

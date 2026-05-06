@@ -281,35 +281,105 @@ namespace Gadgetron{
 
     // ARKS spoke buffer initialization
     arks_buffer_length_TRs_ = buffer_length_TRs.value();
-    arks_max_spokes_per_frame_ = max_spokes_per_frame.value();
     arks_enabled_ = (mode_ == 4 && arks_buffer_length_TRs_ > 0);
     arks_spoke_buffer_.clear();
 
+    // Parse configured lag indices. Throws if user explicitly lists index 7 or out-of-range.
+    arks_lag_indices_.clear();
+    if (arks_enabled_) {
+      try {
+        arks_lag_indices_ = parse_lag_indices(arks_lag_indices.value());
+      } catch (const std::exception& e) {
+        GDEBUG("ARKS: Failed to parse arks_lag_indices='%s': %s\n",
+               arks_lag_indices.value().c_str(), e.what());
+        return GADGET_FAIL;
+      }
+    }
+
     // ARKS file logging initialization
-    arks_log_fp_ = nullptr;
+    if (arks_log_fp_) { fclose(arks_log_fp_); arks_log_fp_ = nullptr; }
     if (arks_enabled_ && arks_log_enabled.value()) {
       std::string log_path = arks_log_file.value();
       arks_log_fp_ = fopen(log_path.c_str(), "w");
       if (arks_log_fp_) {
         GDEBUG("ARKS: Log file opened: %s\n", log_path.c_str());
-        arks_log("ARKS log started. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
-                arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+        std::string idx_str;
+        for (size_t i = 0; i < arks_lag_indices_.size(); i++) {
+          if (i > 0) idx_str += ",";
+          idx_str += std::to_string(arks_lag_indices_[i]);
+        }
+        arks_log("ARKS log started. buffer_length_TRs=%ld, lag_indices=[%s]\n",
+                 arks_buffer_length_TRs_, idx_str.c_str());
       } else {
         GDEBUG("ARKS: WARNING: Failed to open log file: %s\n", log_path.c_str());
       }
     }
 
     if (arks_enabled_) {
-      GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
-             arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+      GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, num_lag_indices=%zu\n",
+             arks_buffer_length_TRs_, arks_lag_indices_.size());
     }
 
     return GADGET_OK;
   }
 
+  int32_t gpuRadialPrepGadget::read_user_slot(const ISMRMRD::AcquisitionHeader* hdr, int idx)
+  {
+    if (idx >= 0 && idx <= 6)  return hdr->user_int[idx];
+    if (idx >= 8 && idx <= 15) return (int32_t)hdr->user_float[idx - 8];
+    return 0;  // idx==7 or out of range; rejected at process_config
+  }
+
+  std::vector<int> gpuRadialPrepGadget::parse_lag_indices(const std::string& spec)
+  {
+    std::vector<int> result;
+    auto trim = [](std::string s) {
+      size_t a = s.find_first_not_of(" \t\r\n");
+      size_t b = s.find_last_not_of(" \t\r\n");
+      return (a == std::string::npos) ? std::string() : s.substr(a, b - a + 1);
+    };
+    auto check_range = [](int i) {
+      if (i < 0 || i > 15)
+        throw std::runtime_error("lag index out of range [0,15]: " + std::to_string(i));
+    };
+
+    std::stringstream ss(spec);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+      tok = trim(tok);
+      if (tok.empty()) continue;
+      size_t dash = tok.find('-');
+      if (dash != std::string::npos) {
+        // Range form "lo-hi": auto-skip index 7
+        int lo = std::stoi(tok.substr(0, dash));
+        int hi = std::stoi(tok.substr(dash + 1));
+        if (lo > hi) std::swap(lo, hi);
+        check_range(lo); check_range(hi);
+        for (int i = lo; i <= hi; i++) {
+          if (i == 7) continue;
+          result.push_back(i);
+        }
+      } else {
+        // Single index: explicit listing of 7 is an error
+        int idx = std::stoi(tok);
+        check_range(idx);
+        if (idx == 7)
+          throw std::runtime_error("lag index 7 is reserved/unused, cannot be used");
+        result.push_back(idx);
+      }
+    }
+    // Deduplicate while preserving order
+    std::set<int> seen;
+    std::vector<int> dedup;
+    for (int i : result) {
+      if (seen.insert(i).second) dedup.push_back(i);
+    }
+    return dedup;
+  }
+
   gpuRadialPrepGadget::ArksGatherResult
   gpuRadialPrepGadget::arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
-                                           const int32_t* current_user_int)
+                                           const ISMRMRD::AcquisitionHeader* current_hdr)
   {
     ArksGatherResult result;
     result.total_gathered = 0;
@@ -324,8 +394,8 @@ namespace Gadgetron{
     long buf_oldest_tr = buf.front().tr_index;
     long buf_newest_tr = buf.back().tr_index;
 
-    int n_samples = current_user_int[3];  // user_int[3] = N_samples (e.g. 9)
-    if (n_samples <= 0) return result;
+    // ARKS gather window is fixed at +/- N_samples = 9 (19 spokes per correlation point)
+    const int n_samples = 9;
 
     // Dedup across all lags by tr_index
     std::set<long> seen_trs;
@@ -357,28 +427,16 @@ namespace Gadgetron{
       }
     };
 
-    // Current frame spans [current_tr - ppf + 1, current_tr]
-    long ppf = profiles_per_frame_[set * slices_ + slice];
-    if (rotations_per_reconstruction_ > 0)
-      ppf *= (frames_per_rotation_[set * slices_ + slice] * rotations_per_reconstruction_);
-
-    // Iterate over lag slots: user_int[4] through user_int[7]
-    for (int lag_slot = 4; lag_slot <= 7; lag_slot++) {
-      int32_t lag = current_user_int[lag_slot];
+    // Iterate over configured lag slots (0..6 = user_int[i], 8..15 = user_float[i-8])
+    // Each lag gathers +/- n_samples spokes around the correlation point (19 spokes per lag)
+    for (int idx : arks_lag_indices_) {
+      int32_t lag = read_user_slot(current_hdr, idx);
       if (lag <= 0) continue;  // skip unused lag slots
 
-      // Past side: correlation point ± n_samples = 2*n_samples+1 spokes (e.g. 19)
       long target_tr = current_tr - lag;
-      gather_range(target_tr - n_samples, target_tr + n_samples);
-
-      // Current side: spokes near current time but OUTSIDE the current frame
-      // Current frame spans [current_tr - ppf + 1, current_tr], so gather
-      // from [current_tr - n_samples, current_tr - ppf] to avoid overlap.
-      long cur_end = current_tr - ppf;  // last TR before current frame
-      long cur_start = current_tr - n_samples;
-      if (cur_end >= cur_start) {
-        gather_range(cur_start, cur_end);
-      }
+      long gather_start = target_tr - n_samples;
+      long gather_end   = target_tr + n_samples;
+      gather_range(gather_start, gather_end);
     }
 
     result.total_gathered = result.profiles.size();
@@ -727,7 +785,7 @@ namespace Gadgetron{
       bool arks_merged = false;
       if (arks_enabled_) {
         long profile_offset_arks = profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0);
-        ArksGatherResult gathered = arks_gather_spokes(profile_offset_arks, set, slice, m1->getObjectPtr()->user_int);
+        ArksGatherResult gathered = arks_gather_spokes(profile_offset_arks, set, slice, m1->getObjectPtr());
 
         if (gathered.total_gathered > 0) {
           long current_profiles = (long)recon_profiles_queue_[set*slices_+slice].size();
