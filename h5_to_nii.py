@@ -50,15 +50,32 @@ with h5py.File(input_path, "r") as f:
     print(f"Found image groups: {image_groups}")
 
     all_sequences = []
+    total_frames_in = 0
     for grp in image_groups:
         data = f[top_key][grp]["data"][()]
-        data = np.squeeze(data)
-        print(f"Loaded {grp} with shape {data.shape}")
+        raw_shape = data.shape
+        # Squeeze any singleton dims EXCEPT axis 0 (the frame axis).
+        # Typical Gadgetron output: (T, slice=1, channel=1, H, W). We want (T, H, W).
+        if data.ndim > 1:
+            singleton_axes = tuple(i for i in range(1, data.ndim) if data.shape[i] == 1)
+            if singleton_axes:
+                data = np.squeeze(data, axis=singleton_axes)
+        # If we ended up with 2D (W, H), restore the frame axis as 1.
+        if data.ndim == 2:
+            data = data[np.newaxis, ...]
+        # If data is complex, take magnitude (Gadgetron sometimes stores complex pre-Extract).
+        if np.iscomplexobj(data):
+            data = np.abs(data)
+        print(f"Loaded {grp}: raw {raw_shape} -> kept {data.shape} (frames={data.shape[0]})")
+        total_frames_in += data.shape[0]
         all_sequences.append(data)
 
 # --- Concatenate all time sequences ---
 continuous = np.concatenate(all_sequences, axis=0)
-print("Final concatenated shape:", continuous.shape)
+print(f"Final concatenated shape: {continuous.shape}  (expected {total_frames_in} frames)")
+assert continuous.shape[0] == total_frames_in, (
+    f"Frame count mismatch: concatenated {continuous.shape[0]} but loaded {total_frames_in}"
+)
 
 # --- Normalize intensity ---
 continuous = continuous.astype(np.float32)

@@ -18,6 +18,9 @@
 #include <deque>
 #include <map>
 #include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <array>
 #include <algorithm>
 #include <boost/shared_ptr.hpp>
 #include <boost/shared_array.hpp>
@@ -108,6 +111,10 @@ namespace Gadgetron{
     // ARKS spoke buffer configuration (active when buffer_length_TRs > 0 in mode 4)
     GADGET_PROPERTY(buffer_length_TRs, int, "ARKS: spoke buffer depth in TR units (0=disabled)", 0);
     GADGET_PROPERTY(max_spokes_per_frame, int, "ARKS: max spokes per recon frame", 256);
+    // ARKS gather toggle (true = ARKS recon, false = mode-4 fallback). Buffer still fills either way.
+    GADGET_PROPERTY(arks_gather_enabled, bool, "ARKS: enable gather logic (false = mode-4 fallback)", true);
+    // Lag slot index range in fcrl_iceparam[0..23]. Format: "start..end" (inclusive). Default skips slot 5.
+    GADGET_PROPERTY(arks_lag_range, std::string, "ARKS: lag slot range in iceparam[0..23], format 'N..M'", "6..23");
     GADGET_PROPERTY(arks_log_enabled, bool, "ARKS: enable file logging", false);
     GADGET_PROPERTY(arks_log_file, std::string, "ARKS: log file path", "/tmp/arks_log.txt");
 
@@ -256,9 +263,34 @@ namespace Gadgetron{
       size_t total_gathered;                  // profiles.size()
     };
 
-    // Gather historical spokes from buffer using lag metadata in user_int[4..7]
+    // Gather historical spokes from buffer using lag metadata in fcrl_iceparam[5..23]
     ArksGatherResult arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
-                                        const int32_t* current_user_int);
+                                        const ISMRMRD::AcquisitionHeader& current_hdr);
+
+    /**
+     * Build the unified Siemens ICE parameter view (24 uint16 values).
+     *
+     * The patched siemens_to_ismrmrd converter spreads aushIceProgramPara[0..23]
+     * across three header arrays as follows:
+     *   acq.user_int[0..7]    <- aushIceProgramPara[0..7]   (uint16, stored as int32)
+     *   acq.user_float[0..7]  <- aushIceProgramPara[8..15]  (uint16 raw bits stuffed into float32 slot)
+     *   acq.idx.user[0..7]    <- aushIceProgramPara[16..23] (uint16, stored as uint16)
+     *
+     * Returns the original 24 uint16 values in their ICE order:
+     *   fcrl_iceparam[0..7]   = user_int[0..7]
+     *   fcrl_iceparam[8..15]  = user_float[0..7]   (bits reinterpreted as uint16, NOT value cast)
+     *   fcrl_iceparam[16..23] = idx.user[0..7]
+     */
+    static inline std::array<uint16_t, 24>
+    fcrl_iceparam(const ISMRMRD::AcquisitionHeader& hdr) {
+      std::array<uint16_t, 24> out{};
+      for (int i = 0; i < 8; i++) out[i]      = static_cast<uint16_t>(hdr.user_int[i]);
+      for (int i = 0; i < 8; i++) {
+      out[8 + i] = (uint16_t)hdr.user_float[i];   // value cast
+      }
+      for (int i = 0; i < 8; i++) out[16 + i] = hdr.idx.user[i];
+      return out;
+    }
 
     // Build radial trajectory from explicit angle list (for ARKS combined spoke set)
     boost::shared_ptr< hoNDArray<floatd2> > arks_build_combined_trajectory_2d(
@@ -266,7 +298,9 @@ namespace Gadgetron{
 
     long arks_buffer_length_TRs_;
     long arks_max_spokes_per_frame_;
-    bool arks_enabled_;  // true when mode==4 && buffer_length_TRs > 0
+    bool arks_enabled_;          // true when mode==4 && buffer_length_TRs>0 && arks_gather_enabled
+    int  arks_lag_start_;        // inclusive lower bound of iceparam[*] lag iteration
+    int  arks_lag_end_;          // inclusive upper bound
     std::map<unsigned int, std::deque<ArksSpoke>> arks_spoke_buffer_;
 
     // ARKS file logging

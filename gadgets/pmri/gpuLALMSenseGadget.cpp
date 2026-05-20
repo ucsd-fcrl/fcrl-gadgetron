@@ -150,6 +150,24 @@ int gpuLALMSenseGadget::process(GadgetContainerMessage<ISMRMRD::ImageHeader> *m1
 	boost::shared_ptr< cuNDArray<float_complext> > csm(new cuNDArray<float_complext> (*j->csm_host_));
 	boost::shared_ptr< cuNDArray<float_complext> > device_samples(new cuNDArray<float_complext> (*j->dat_host_));
 
+	// === DIAGNOSTIC: log LALM input on GPU ===
+	{
+		float dat_norm = nrm2(device_samples.get());
+		float dcw_sum  = asum(dcw.get());
+		FILE* dbg = fopen("/work/lalm_debug.txt", "a");
+		if (dbg) {
+			fprintf(dbg, "LALM_INPUT slice=%u samples=%u channels=%u rotations=%u frames=%u "
+			             "dat_dim=[%zu,%zu] traj_dim=[%zu,%zu] dcw_n=%zu | "
+			             "dat_norm=%.3e dcw_sum=%.3e\n",
+			        slice_number_, samples, channels, rotations, frames,
+			        device_samples->get_size(0), device_samples->get_size(1),
+			        traj->get_size(0), traj->get_size(1),
+			        dcw->get_number_of_elements(),
+			        dat_norm, dcw_sum);
+			fclose(dbg);
+		}
+	}
+
 
 	// Take the reconstruction matrix size from the regulariaztion image.
 	// It could be oversampled from the sequence specified size...
@@ -214,6 +232,45 @@ int gpuLALMSenseGadget::process(GadgetContainerMessage<ISMRMRD::ImageHeader> *m1
 
 	//Apply weights
 	*device_samples *= *dcw;
+
+	// === DIAGNOSTIC: adjoint norm — does measured data project to image space? ===
+	// Apply E^H to weighted data y'. If gathered spokes contribute to image space, the
+	// adjoint norm should grow with sample count. If it's flat regardless of N, the
+	// gridding/operator is silently dropping samples.
+	{
+		float weighted_norm = nrm2(device_samples.get());
+		auto adj = boost::make_shared<cuNDArray<float_complext>>(image_dims);
+		clear(adj.get());
+		try {
+			E_->mult_MH(device_samples.get(), adj.get(), false);
+			float adj_norm = nrm2(adj.get());
+			float adj_max  = 0.0f;
+			{
+				auto h = adj->to_host();
+				size_t n = h->get_number_of_elements();
+				const float_complext* p = h->get_data_ptr();
+				for (size_t i = 0; i < n; i++) {
+					float m = std::sqrt(p[i].real()*p[i].real() + p[i].imag()*p[i].imag());
+					if (m > adj_max) adj_max = m;
+				}
+			}
+			FILE* dbg = fopen("/work/lalm_debug.txt", "a");
+			if (dbg) {
+				fprintf(dbg, "LALM_ADJOINT slice=%u image_dims=[%zu,%zu,%zu] | "
+				             "weighted_dat_norm=%.3e adj_norm=%.3e adj_max=%.3e\n",
+				        slice_number_,
+				        image_dims[0], image_dims[1], image_dims.size() > 2 ? image_dims[2] : 1,
+				        weighted_norm, adj_norm, adj_max);
+				fclose(dbg);
+			}
+		} catch (const std::exception& e) {
+			FILE* dbg = fopen("/work/lalm_debug.txt", "a");
+			if (dbg) {
+				fprintf(dbg, "LALM_ADJOINT slice=%u FAILED: %s\n", slice_number_, e.what());
+				fclose(dbg);
+			}
+		}
+	}
 
 	// Invoke solver
 	//

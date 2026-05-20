@@ -15,6 +15,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdarg>
+#include <cstdlib>
 
 namespace Gadgetron{
 
@@ -282,8 +283,41 @@ namespace Gadgetron{
     // ARKS spoke buffer initialization
     arks_buffer_length_TRs_ = buffer_length_TRs.value();
     arks_max_spokes_per_frame_ = max_spokes_per_frame.value();
-    arks_enabled_ = (mode_ == 4 && arks_buffer_length_TRs_ > 0);
+    // ARKS is fully active only if mode==4, buffer depth > 0, AND XML toggle is on.
+    // When toggle is off, the recon falls back to plain mode-4 custom-angle + sliding window:
+    // no buffer push, no gather call, no log file.
+    arks_enabled_ = (mode_ == 4 && arks_buffer_length_TRs_ > 0 && arks_gather_enabled.value());
     arks_spoke_buffer_.clear();
+
+    // Parse arks_lag_range string: format "N..M" (inclusive). Defaults to 6..23 if malformed.
+    arks_lag_start_ = 6;
+    arks_lag_end_   = 23;
+    {
+      std::string spec = arks_lag_range.value();
+      size_t dotdot = spec.find("..");
+      try {
+        if (dotdot != std::string::npos) {
+          arks_lag_start_ = std::stoi(spec.substr(0, dotdot));
+          arks_lag_end_   = std::stoi(spec.substr(dotdot + 2));
+        } else if (!spec.empty()) {
+          // single number "N" means [N..N]
+          arks_lag_start_ = arks_lag_end_ = std::stoi(spec);
+        }
+      } catch (const std::exception& e) {
+        GDEBUG("ARKS: Failed to parse arks_lag_range='%s' (%s). Using default 6..23\n",
+               spec.c_str(), e.what());
+        arks_lag_start_ = 6;
+        arks_lag_end_   = 23;
+      }
+      // Clamp to valid iceparam indices [0, 23]
+      if (arks_lag_start_ < 0)  arks_lag_start_ = 0;
+      if (arks_lag_end_   > 23) arks_lag_end_   = 23;
+      if (arks_lag_start_ > arks_lag_end_) {
+        GDEBUG("ARKS: arks_lag_range start > end (%d > %d). Swapping.\n",
+               arks_lag_start_, arks_lag_end_);
+        std::swap(arks_lag_start_, arks_lag_end_);
+      }
+    }
 
     // ARKS file logging initialization
     arks_log_fp_ = nullptr;
@@ -292,16 +326,20 @@ namespace Gadgetron{
       arks_log_fp_ = fopen(log_path.c_str(), "w");
       if (arks_log_fp_) {
         GDEBUG("ARKS: Log file opened: %s\n", log_path.c_str());
-        arks_log("ARKS log started. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
-                arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+        arks_log("ARKS log started. buffer_length_TRs=%ld, max_spokes_per_frame=%ld, "
+                 "gather_enabled=%d, lag_range=%d..%d\n",
+                 arks_buffer_length_TRs_, arks_max_spokes_per_frame_,
+                 (int)arks_gather_enabled_, arks_lag_start_, arks_lag_end_);
       } else {
         GDEBUG("ARKS: WARNING: Failed to open log file: %s\n", log_path.c_str());
       }
     }
 
     if (arks_enabled_) {
-      GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, max_spokes_per_frame=%ld\n",
-             arks_buffer_length_TRs_, arks_max_spokes_per_frame_);
+      GDEBUG("ARKS: Spoke buffer enabled. buffer_length_TRs=%ld, max_spokes_per_frame=%ld, "
+             "gather_enabled=%d, lag_range=%d..%d\n",
+             arks_buffer_length_TRs_, arks_max_spokes_per_frame_,
+             (int)arks_gather_enabled_, arks_lag_start_, arks_lag_end_);
     }
 
     return GADGET_OK;
@@ -309,7 +347,7 @@ namespace Gadgetron{
 
   gpuRadialPrepGadget::ArksGatherResult
   gpuRadialPrepGadget::arks_gather_spokes(long current_tr, unsigned int set, unsigned int slice,
-                                           const int32_t* current_user_int)
+                                           const ISMRMRD::AcquisitionHeader& current_hdr)
   {
     ArksGatherResult result;
     result.total_gathered = 0;
@@ -324,14 +362,17 @@ namespace Gadgetron{
     long buf_oldest_tr = buf.front().tr_index;
     long buf_newest_tr = buf.back().tr_index;
 
-    int n_samples = 19;  // user_int[3] = N_samples
+    int n_samples = 19;
     if (n_samples <= 0) return result;
-    int half_window = n_samples / 2;  // e.g. 9/2 = 4, so +/- 4 around target
+    int half_window = n_samples / 2;  // e.g. 19/2 = 9, so +/- 9 around target
 
-    // Iterate over lag slots: user_int[5] through user_int[7]
-    for (int lag_slot = 5; lag_slot <= 7; lag_slot++) {
-      int32_t lag = current_user_int[lag_slot];
-      if (lag <= 0) continue;  // skip unused lag slots
+    // Build unified ICE parameter view (24 uint16 values from user_int + user_float + idx.user)
+    std::array<uint16_t, 24> iceparam = fcrl_iceparam(current_hdr);
+
+    // Iterate over lag slots: fcrl_iceparam[arks_lag_start_..arks_lag_end_] (configured via XML)
+    for (int lag_slot = arks_lag_start_; lag_slot <= arks_lag_end_; lag_slot++) {
+      uint16_t lag = iceparam[lag_slot];
+      if (lag == 0) continue;  // skip unused lag slots
 
       long target_tr = current_tr - lag;
       long gather_start = target_tr - half_window;
@@ -370,6 +411,32 @@ namespace Gadgetron{
     }
 
     result.total_gathered = result.profiles.size();
+
+    // === DIAGNOSTIC PHASE 1: gather output verification ===
+    {
+      int active_lags = 0;
+      for (int i = arks_lag_start_; i <= arks_lag_end_; i++) if (iceparam[i] != 0) active_lags++;
+      arks_log("GATHER tr=%ld set=%u slice=%u buf=[%ld..%ld]:%zu range=%d..%d active_lags=%d total_gathered=%zu\n",
+               current_tr, set, slice, buf_oldest_tr, buf_newest_tr, buf.size(),
+               arks_lag_start_, arks_lag_end_, active_lags, result.profiles.size());
+
+      // Spot-check first 5 gathered spokes (pointer validity + first sample)
+      for (size_t g = 0; g < std::min(result.profiles.size(), (size_t)5); g++) {
+        ProfileMessage* p = result.profiles[g];
+        bool valid = (p != nullptr && p->getObjectPtr() != nullptr);
+        if (valid) {
+          auto& d = *p->getObjectPtr();
+          std::complex<float> s0 = d.get_data_ptr()[0];
+          arks_log("  g[%zu]: ptr=%p valid=1 spp=%zu ncoils=%zu angle=%.4f sample[0]=(%.3e,%.3e)\n",
+                   g, (void*)p, d.get_size(0), d.get_size(1),
+                   result.angles_rad[g], s0.real(), s0.imag());
+        } else {
+          arks_log("  g[%zu]: ptr=%p valid=0 angle=%.4f\n",
+                   g, (void*)p, result.angles_rad[g]);
+        }
+      }
+    }
+
     return result;
   }
 
@@ -715,7 +782,7 @@ namespace Gadgetron{
       bool arks_merged = false;
       if (arks_enabled_) {
         long profile_offset_arks = profiles_counter_global_[set*slices_+slice] - ((new_frame_detected) ? 1 : 0);
-        ArksGatherResult gathered = arks_gather_spokes(profile_offset_arks, set, slice, m1->getObjectPtr()->user_int);
+        ArksGatherResult gathered = arks_gather_spokes(profile_offset_arks, set, slice, *m1->getObjectPtr());
 
         if (gathered.total_gathered > 0) {
           long current_profiles = (long)recon_profiles_queue_[set*slices_+slice].size();
@@ -762,6 +829,46 @@ namespace Gadgetron{
             }
           }
 
+          // === DIAGNOSTIC PHASE 2: verify merge byte-equality ===
+          {
+            float_complext* combined_ptr = combined->get_data_ptr();
+            float_complext* current_src  = samples_host->get_data_ptr();
+
+            // Spot-check current spoke 0, coil 0, sample 0 (both are float_complext)
+            float a_re = current_src[0].real(),  a_im = current_src[0].imag();
+            float b_re = combined_ptr[0].real(), b_im = combined_ptr[0].imag();
+            bool current_ok = (a_re == b_re && a_im == b_im);
+
+            // Spot-check gathered spoke 0, coil 0, sample 0
+            // gathered.profiles[g]'s data is std::complex<float>; combined is float_complext.
+            // Bytes are equivalent (real, imag); compare scalar by scalar.
+            bool gathered_ok = false;
+            float ga_re = 0, ga_im = 0, gb_re = 0, gb_im = 0;
+            if (!gathered.profiles.empty() && gathered.profiles[0] && gathered.profiles[0]->getObjectPtr()) {
+              const std::complex<float>* g0_src = gathered.profiles[0]->getObjectPtr()->get_data_ptr();
+              ga_re = g0_src[0].real(); ga_im = g0_src[0].imag();
+              float_complext gb = combined_ptr[current_profiles * samples_per_profile_];
+              gb_re = gb.real(); gb_im = gb.imag();
+              gathered_ok = (ga_re == gb_re && ga_im == gb_im);
+            }
+
+            // Norm of first profile worth of samples for current and gathered sections
+            double cur_norm_sq = 0.0, gath_norm_sq = 0.0;
+            for (long i = 0; i < samples_per_profile_; i++) {
+              float r1 = combined_ptr[i].real(), i1 = combined_ptr[i].imag();
+              cur_norm_sq += (double)r1 * r1 + (double)i1 * i1;
+              float r2 = combined_ptr[current_profiles * samples_per_profile_ + i].real();
+              float i2 = combined_ptr[current_profiles * samples_per_profile_ + i].imag();
+              gath_norm_sq += (double)r2 * r2 + (double)i2 * i2;
+            }
+
+            arks_log("MERGE current=%ld gathered=%zu total=%ld ncoils=%u | "
+                     "cur_byteOK=%d gath_byteOK=%d | cur_norm=%.3e gath_norm=%.3e\n",
+                     current_profiles, gathered.profiles.size(), total_profiles, ncoils,
+                     current_ok ? 1 : 0, gathered_ok ? 1 : 0,
+                     std::sqrt(cur_norm_sq), std::sqrt(gath_norm_sq));
+          }
+
           samples_host = combined;
 
           // Build combined trajectory from explicit angle list
@@ -802,6 +909,41 @@ namespace Gadgetron{
       m4->getObjectPtr()->dcw_host_ = boost::shared_ptr< hoNDArray<float> >(new hoNDArray<float>(host_weights_recon_[set*slices_+slice]));
       m4->getObjectPtr()->csm_host_ = boost::shared_ptr< hoNDArray<float_complext> >( new hoNDArray<float_complext>(csm_host_[set*slices_+slice]));
       m4->getObjectPtr()->reg_host_ = boost::shared_ptr< hoNDArray<float_complext> >( new hoNDArray<float_complext>(reg_host_[set*slices_+slice]));
+
+      // === DIAGNOSTIC PHASE 3: log job dispatch (what reaches LALM downstream) ===
+      if (arks_log_fp_) {
+        auto& dat = *m4->getObjectPtr()->dat_host_;
+        auto& tra = *m4->getObjectPtr()->tra_host_;
+        auto& dcw = *m4->getObjectPtr()->dcw_host_;
+
+        // Compute data L2 norm (so we can compare ARKS vs non-ARKS magnitudes)
+        double dat_norm_sq = 0.0;
+        const float_complext* dp = dat.get_data_ptr();
+        size_t dat_n = dat.get_number_of_elements();
+        for (size_t i = 0; i < dat_n; i++) {
+          float r = dp[i].real(), im = dp[i].imag();
+          dat_norm_sq += (double)r * r + (double)im * im;
+        }
+
+        // DCW stats
+        double dcw_min = 1e30, dcw_max = -1e30, dcw_sum = 0.0;
+        const float* wp = dcw.get_data_ptr();
+        size_t dcw_n = dcw.get_number_of_elements();
+        for (size_t i = 0; i < dcw_n; i++) {
+          if (wp[i] < dcw_min) dcw_min = wp[i];
+          if (wp[i] > dcw_max) dcw_max = wp[i];
+          dcw_sum += wp[i];
+        }
+
+        arks_log("DISPATCH set=%u slice=%u arks_merged=%d | "
+                 "dat=[%zu,%zu] traj=[%zu,%zu] dcw=%zu | "
+                 "dat_norm=%.3e dcw_min=%.3e dcw_max=%.3e dcw_mean=%.3e\n",
+                 set, slice, (int)arks_merged,
+                 dat.get_size(0), dat.get_size(1),
+                 tra.get_size(0), tra.get_size(1),
+                 dcw_n,
+                 std::sqrt(dat_norm_sq), dcw_min, dcw_max, dcw_sum / std::max((size_t)1, dcw_n));
+      }
 
       // Pull the image headers out of the queue
       //

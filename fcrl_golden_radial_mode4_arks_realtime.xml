@@ -34,7 +34,7 @@
       <name>CoilReduction</name>
       <dll>gadgetron_mricore</dll>
       <classname>CoilReductionGadget</classname>
-      <property><name>coils_out</name><value>8</value></property>
+      <property><name>coils_out</name><value>16</value></property>
     </gadget>
 
     <gadget>
@@ -45,6 +45,9 @@
       <property><name>mode</name><value>4</value></property>
       <property><name>fcrl_custom_angle_user_int_index</name><value>4</value></property>
       <property><name>profiles_per_frame</name><value>10</value></property>
+
+      <property><name>sliding_window_profiles</name><value>0</value></property>
+
       <property><name>rotations_per_reconstruction</name><value>0</value></property>
       <property><name>buffer_frames_per_rotation</name><value>32</value></property>
       <property><name>buffer_length_in_rotations</name><value>1</value></property>
@@ -55,6 +58,12 @@
       <!-- ARKS spoke buffer -->
       <property><name>buffer_length_TRs</name><value>5000</value></property>
       <property><name>max_spokes_per_frame</name><value>256</value></property>
+      <!-- ARKS toggle: true = full ARKS (buffer + gather + merge).
+           false = plain mode-4 custom-angle + sliding window (no buffer, no gather, no log). -->
+      <property><name>arks_gather_enabled</name><value>true</value></property>
+      <!-- Lag slot range in fcrl_iceparam[0..23]. Format: "start..end" (inclusive).
+           iceparam[0..7]=user_int[0..7], [8..15]=user_float[0..7], [16..23]=idx.user[0..7] -->
+      <property><name>arks_lag_range</name><value>6..23</value></property>
       <!-- ARKS file logging -->
       <property><name>arks_log_enabled</name><value>true</value></property>
       <property><name>arks_log_file</name><value>/work/arks_log.txt</value></property>
